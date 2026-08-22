@@ -1,30 +1,77 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Enum as SAEnum
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-import enum
-
-from app.core.database import Base
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.models.user import UserRole
 
 
-class UserRole(str, enum.Enum):
-    admin = "admin"
-    member = "member"
+class UserCreate(BaseModel):
+    full_name: str = Field(..., min_length=2, max_length=100, examples=["John Doe"])
+    email: EmailStr = Field(..., examples=["john@example.com"])
+    password: str = Field(..., min_length=8, max_length=128, examples=["strongpassword123"])
+    role: UserRole = Field(default=UserRole.member)
+
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit")
+        return v
+
+    @field_validator("role")
+    @classmethod
+    def public_registration_role(cls, v: UserRole) -> UserRole:
+        if v != UserRole.member:
+            raise ValueError("Public registration can only create member accounts")
+        return v
 
 
-class User(Base):
-    __tablename__ = "users"
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = Field(None, min_length=2, max_length=100)
+    email: Optional[EmailStr] = None
+    is_active: Optional[bool] = None
 
-    id = Column(Integer, primary_key=True, index=True)
-    full_name = Column(String(100), nullable=False)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    role = Column(SAEnum(UserRole), default=UserRole.member, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    # Relationships
-    borrow_records = relationship("BorrowRecord", back_populates="user", lazy="dynamic")
+class UserAdminUpdate(UserUpdate):
+    """Extended update schema for admins (can change role)."""
+    role: Optional[UserRole] = None
 
-    def __repr__(self):
-        return f"<User id={self.id} email={self.email} role={self.role}>"
+
+class UserResponse(BaseModel):
+    id: int
+    full_name: str
+    email: str
+    role: UserRole
+    is_active: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class UserPublicResponse(BaseModel):
+    """Limited user info for non-admin consumers."""
+    id: int
+    full_name: str
+    email: str
+    role: UserRole
+
+    model_config = {"from_attributes": True}
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr = Field(..., examples=["john@example.com"])
+    password: str = Field(..., examples=["strongpassword123"])
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    user: UserPublicResponse
+
+
+class UserFilter(BaseModel):
+    """Query filters for listing users."""
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+    search: Optional[str] = Field(None, description="Search by name or email")
